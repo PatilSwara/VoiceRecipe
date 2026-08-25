@@ -4,7 +4,8 @@ function LandingPage({
   transcriptMode,
   setTranscriptMode,
   generateRecipe,
-  loading
+  loading,
+  error
 }) {
   return (
     <div className="app">
@@ -37,11 +38,17 @@ function LandingPage({
 
         </select>
 
-        <button onClick={generateRecipe}>
+        <button onClick={generateRecipe} disabled={loading}>
           Generate Recipe
         </button>
 
       </div>
+
+      {error && (
+        <div className="error-message" style={{color: 'red', marginTop: '1rem'}}>
+          {error}
+        </div>
+      )}
 
       {loading && (
         <p>Generating recipe...</p>
