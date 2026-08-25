@@ -59,3 +59,9 @@ Thumbs.db
 
 *.swp
 *.swo
+
+# ==========================================
+# Agent Context Files
+# ==========================================
+.agent_tasks.md
+.agent_architecture_review.md
