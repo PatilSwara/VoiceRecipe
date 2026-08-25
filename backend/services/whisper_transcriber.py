@@ -21,13 +21,13 @@ def transcribe_youtube_video(video_url):
 
     audio_id = str(uuid.uuid4())
 
-    output_template = f"{TEMP_FOLDER}/{audio_id}"
+    output_template = f"{TEMP_FOLDER}/{audio_id}.%(ext)s"
 
     ydl_opts = {
 
     "format": "bestaudio/best",
 
-    "outtmpl": "temp_audio.%(ext)s",
+    "outtmpl": output_template,
 
     "quiet": True,
 
@@ -36,20 +36,25 @@ def transcribe_youtube_video(video_url):
     }
 }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+    downloaded_file = None
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
 
-        info = ydl.extract_info(video_url, download=True)
+            info = ydl.extract_info(video_url, download=True)
 
-        downloaded_file = ydl.prepare_filename(info)
+            downloaded_file = ydl.prepare_filename(info)
 
-    segments, info = model.transcribe(
-        downloaded_file,
-        beam_size=5
-    )
+        segments, info = model.transcribe(
+            downloaded_file,
+            beam_size=5
+        )
 
-    transcript_lines = []
+        transcript_lines = []
 
-    for segment in segments:
-        transcript_lines.append(segment.text)
+        for segment in segments:
+            transcript_lines.append(segment.text)
 
-    return transcript_lines
+        return transcript_lines
+    finally:
+        if downloaded_file and os.path.exists(downloaded_file):
+            os.remove(downloaded_file)

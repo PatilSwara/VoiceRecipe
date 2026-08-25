@@ -12,10 +12,11 @@ ENV_PATH = BASE_DIR / ".env"
 
 load_dotenv(dotenv_path=ENV_PATH)
 
-client = OpenAI(
-    api_key=os.getenv("GROQ_API_KEY"),
-    base_url="https://api.groq.com/openai/v1"
-)
+def get_client():
+    return OpenAI(
+        api_key=os.getenv("GROQ_API_KEY"),
+        base_url="https://api.groq.com/openai/v1"
+    )
 
 
 def parse_recipe_with_llm(transcript_lines):
@@ -95,7 +96,7 @@ Transcript:
 {transcript_text}
 """
 
-    response = client.chat.completions.create(
+    response = get_client().chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
             {
@@ -103,13 +104,11 @@ Transcript:
                 "content": prompt
             }
         ],
-        temperature=0
+        temperature=0,
+        response_format={"type": "json_object"}
     )
 
     text_response = response.choices[0].message.content.strip()
-
-    text_response = text_response.replace("```json", "")
-    text_response = text_response.replace("```", "")
 
     try:
 

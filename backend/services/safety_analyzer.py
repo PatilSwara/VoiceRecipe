@@ -2,12 +2,14 @@ import json
 import os
 
 from openai import OpenAI
+from pydantic import ValidationError
 from models.recipe import SafetyAnalysis
 
-client = OpenAI(
-    api_key=os.getenv("GROQ_API_KEY"),
-    base_url="https://api.groq.com/openai/v1"
-)
+def get_client():
+    return OpenAI(
+        api_key=os.getenv("GROQ_API_KEY"),
+        base_url="https://api.groq.com/openai/v1"
+    )
 
 
 def analyze_recipe_safety(recipe):
@@ -66,7 +68,7 @@ Recipe:
 {json.dumps(recipe.model_dump(), indent=2)}
 """
 
-    response = client.chat.completions.create(
+    response = get_client().chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
             {
@@ -74,13 +76,11 @@ Recipe:
                 "content": prompt
             }
         ],
-        temperature=0
+        temperature=0,
+        response_format={"type": "json_object"}
     )
 
     text_response = response.choices[0].message.content.strip()
-
-    text_response = text_response.replace("```json", "")
-    text_response = text_response.replace("```", "")
 
     try:
         safety_data = json.loads(text_response)
@@ -89,8 +89,7 @@ Recipe:
 
         return validated_safety
 
-    except json.JSONDecodeError:
-
+    except (json.JSONDecodeError, ValidationError):
         return SafetyAnalysis(
         safety_warnings=[],
         first_aid=[]
