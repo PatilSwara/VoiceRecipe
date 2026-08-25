@@ -6,15 +6,17 @@ from services.parser_llm import parse_recipe_with_llm
 from fastapi.middleware.cors import CORSMiddleware
 from services.safety_analyzer import analyze_recipe_safety
 from services.whisper_transcriber import transcribe_youtube_video
-from fastapi.responses import Response
-from services.tts_service import generate_speech
 from services.cooking_assistant import (
     answer_cooking_question
 )
+from youtube_transcript_api import YouTubeTranscriptApiException
+
+import os
+
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=[os.getenv("ALLOWED_ORIGINS", "http://localhost:5173")],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -22,17 +24,6 @@ app.add_middleware(
 @app.get("/")
 def home():
     return {"message": "Recipe Voice App Backend Running"}
-@app.post("/speak/")
-def speak(data: dict):
-
-    text = data["text"]
-
-    audio = generate_speech(text)
-
-    return Response(
-        content=audio,
-        media_type="audio/mpeg"
-    )
 
 @app.post("/ask/")
 def ask_question(data: dict):
@@ -74,9 +65,9 @@ def transcript(url: str, mode: str = "captions"):
 
             transcript_text = get_transcript(video_id)
 
-    except Exception:
+    except YouTubeTranscriptApiException as e:
 
-        print("YouTube captions unavailable.")
+        print(f"YouTube captions unavailable: {e}")
 
 
         transcript_text = transcribe_youtube_video(url)
@@ -84,6 +75,13 @@ def transcript(url: str, mode: str = "captions"):
     cleaned_text = clean_transcript(transcript_text)
 
     recipe = parse_recipe_with_llm(cleaned_text)
+    
+    if recipe.title == "Parsing Failed":
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to parse recipe from transcript."
+        )
+
     safety_data = analyze_recipe_safety(recipe)
     return {
     **recipe.model_dump(),
