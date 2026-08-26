@@ -24,17 +24,10 @@ def transcribe_youtube_video(video_url):
     output_template = f"{TEMP_FOLDER}/{audio_id}.%(ext)s"
 
     ydl_opts = {
-
-    "format": "bestaudio/best",
-
-    "outtmpl": output_template,
-
-    "quiet": True,
-
-    "js_runtimes": {
-        "node": "node"
+        "format": "bestaudio/best",
+        "outtmpl": output_template,
+        "quiet": True
     }
-}
 
     downloaded_file = None
     try:
