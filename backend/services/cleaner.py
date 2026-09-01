@@ -43,17 +43,6 @@ def clean_transcript(lines):
         if "[Applause]" in line:
             continue
 
-        line_lower = line.lower()
-
-        # Keep only cooking-related segments
-        contains_keyword = any(
-            keyword in line_lower
-            for keyword in COOKING_KEYWORDS
-        )
-
-        if not contains_keyword:
-            continue
-
         cleaned_lines.append(line)
 
     return cleaned_lines

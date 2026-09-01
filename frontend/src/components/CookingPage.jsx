@@ -9,9 +9,22 @@ function CookingPage({ recipe, exitCookingMode }) {
   const currentStepRef = useRef(0);
   const recognitionRef = useRef(null);
 
+  const voiceEnabledRef = useRef(voiceEnabled);
+  useEffect(() => {
+    voiceEnabledRef.current = voiceEnabled;
+  }, [voiceEnabled]);
+
   // Initialize speech synthesis and read first step on mount
   useEffect(() => {
-    speakStep(recipe.steps[0].instruction);
+    if (window.speechSynthesis.getVoices().length === 0) {
+      window.speechSynthesis.onvoiceschanged = () => {
+        speakStep(recipe.steps[0].instruction);
+        window.speechSynthesis.onvoiceschanged = null;
+      };
+    } else {
+      speakStep(recipe.steps[0].instruction);
+    }
+
     return () => {
       window.speechSynthesis.cancel();
       if (recognitionRef.current) {
@@ -23,7 +36,11 @@ function CookingPage({ recipe, exitCookingMode }) {
   function speakStep(text) {
     window.speechSynthesis.cancel();
     
-    // small timeout to prevent silent failure on some browsers
+    // Pause recognition while speaking to prevent feedback loop
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+    }
+    
     setTimeout(() => {
       const speech = new SpeechSynthesisUtterance(text);
       const voices = window.speechSynthesis.getVoices();
@@ -31,6 +48,18 @@ function CookingPage({ recipe, exitCookingMode }) {
       if (selectedVoice) speech.voice = selectedVoice;
       speech.lang = "en-US";
       speech.rate = 0.9;
+      
+      speech.onend = () => {
+        // Restart recognition if it was enabled
+        if (voiceEnabledRef.current && recognitionRef.current) {
+          try {
+            recognitionRef.current.start();
+          } catch (e) {
+            console.error("Failed to restart recognition after speaking", e);
+          }
+        }
+      };
+
       window.speechSynthesis.speak(speech);
     }, 50);
   }

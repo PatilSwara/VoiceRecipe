@@ -10,6 +10,10 @@ def extract_video_id(url):
         "www.youtube.com",
         "youtube.com"
     ):
-        return parse_qs(parsed_url.query)["v"][0]
+        if parsed_url.path.startswith("/shorts/"):
+            return parsed_url.path.split("/")[2]
+        query = parse_qs(parsed_url.query)
+        if "v" in query:
+            return query["v"][0]
 
     return None

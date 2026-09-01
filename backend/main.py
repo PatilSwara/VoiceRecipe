@@ -5,11 +5,11 @@ from services.cleaner import clean_transcript
 from services.parser_llm import parse_recipe_with_llm
 from fastapi.middleware.cors import CORSMiddleware
 from services.safety_analyzer import analyze_recipe_safety
-from services.whisper_transcriber import transcribe_youtube_video
 from services.cooking_assistant import (
     answer_cooking_question
 )
 from youtube_transcript_api import YouTubeTranscriptApiException
+import openai
 
 import os
 
@@ -28,19 +28,21 @@ def home():
 @app.post("/ask/")
 def ask_question(data: dict):
 
-    answer = answer_cooking_question(
-        recipe=data["recipe"],
-        current_step=data["current_step"],
-        question=data["question"]
-    )
+    try:
+        answer = answer_cooking_question(
+            recipe=data["recipe"],
+            current_step=data["current_step"],
+            question=data["question"]
+        )
 
-    return {
-        "answer": answer
-    }
+        return {
+            "answer": answer
+        }
+    except openai.OpenAIError:
+        raise HTTPException(status_code=503, detail="AI service is currently busy or unavailable. Please try again later.")
 
 @app.get("/transcript/")
 def transcript(url: str, mode: str = "captions"):
-
 
     video_id = extract_video_id(url)
 
@@ -50,39 +52,38 @@ def transcript(url: str, mode: str = "captions"):
             detail="Invalid YouTube URL"
         )
 
-
     try:
-
         if mode == "whisper":
-
-            print("Using Whisper transcription...")
-
-            transcript_text = transcribe_youtube_video(url)
-
+            raise HTTPException(
+                status_code=501,
+                detail="Whisper fallback is currently disabled in this environment."
+            )
         else:
-
             print("Using YouTube captions...")
-
             transcript_text = get_transcript(video_id)
 
     except YouTubeTranscriptApiException as e:
-
         print(f"YouTube captions unavailable: {e}")
-
-
-        transcript_text = transcribe_youtube_video(url)
+        raise HTTPException(
+            status_code=400,
+            detail="YouTube captions are unavailable or blocked for this video."
+        )
 
     cleaned_text = clean_transcript(transcript_text)
 
-    recipe = parse_recipe_with_llm(cleaned_text)
-    
-    if recipe.title == "Parsing Failed":
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to parse recipe from transcript."
-        )
+    try:
+        recipe = parse_recipe_with_llm(cleaned_text)
+        
+        if recipe.title == "Parsing Failed":
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to parse recipe from transcript."
+            )
 
-    safety_data = analyze_recipe_safety(recipe)
+        safety_data = analyze_recipe_safety(recipe)
+    except openai.OpenAIError:
+        raise HTTPException(status_code=503, detail="AI service is currently busy or unavailable. Please try again later.")
+
     return {
     **recipe.model_dump(),
     **safety_data.model_dump()
