@@ -1,11 +1,19 @@
 import os
+import logging
 from typing import Literal
 
 import openai
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from youtube_transcript_api import YouTubeTranscriptApiException
+from youtube_transcript_api import (
+    AgeRestricted,
+    NoTranscriptFound,
+    RequestBlocked,
+    TranscriptsDisabled,
+    VideoUnavailable,
+    YouTubeTranscriptApiException,
+)
 
 from models.recipe import NonEmptyText, Recipe
 from services.cleaner import clean_transcript
@@ -13,16 +21,22 @@ from services.cooking_assistant import answer_cooking_question
 from services.parser_llm import NoRecipeError, RecipeParseError, parse_recipe_with_llm
 from services.safety_analyzer import SafetyParseError, analyze_recipe_safety
 from services.transcript import get_transcript
+from services.video_fallback import VideoFallbackError, get_video_cooking_notes, has_video_fallback
 from utils.youtube import extract_video_id
 
 
 MAX_TRANSCRIPT_CHARS = 16_000
+logger = logging.getLogger(__name__)
 
 
 class AskRequest(BaseModel):
     recipe: Recipe
     current_step: int = Field(ge=0)
     question: NonEmptyText
+
+
+class TranscriptRequest(BaseModel):
+    transcript: NonEmptyText
 
 app = FastAPI()
 app.add_middleware(
@@ -69,21 +83,66 @@ def transcript(url: str, mode: Literal["captions", "whisper"] = "captions"):
             detail="Invalid YouTube URL"
         )
 
-    try:
-        if mode == "whisper":
-            raise HTTPException(
-                status_code=501,
-                detail="Whisper fallback is currently disabled in this environment."
-            )
-        transcript_text = get_transcript(video_id)
-
-    except YouTubeTranscriptApiException:
+    if mode == "whisper":
         raise HTTPException(
-            status_code=400,
-            detail="YouTube captions are unavailable or blocked for this video."
+            status_code=501,
+            detail="Whisper fallback is currently disabled in this environment."
         )
 
-    cleaned_text = clean_transcript(transcript_text)
+    try:
+        transcript_text = get_transcript(video_id)
+    except RequestBlocked as error:
+        logger.warning("YouTube blocked captions for %s: %s", video_id, type(error).__name__)
+        if has_video_fallback():
+            return build_recipe_from_video(video_id)
+        raise HTTPException(
+            status_code=503,
+            detail="YouTube blocked caption requests from this server. Configure the free Gemini video fallback or paste the video's transcript."
+        ) from error
+    except (NoTranscriptFound, TranscriptsDisabled) as error:
+        logger.info("Captions unavailable for %s: %s", video_id, type(error).__name__)
+        if has_video_fallback():
+            return build_recipe_from_video(video_id)
+        raise HTTPException(
+            status_code=422,
+            detail="No accessible English captions were found for this video. You can paste a transcript below."
+        ) from error
+    except (VideoUnavailable, AgeRestricted) as error:
+        logger.info("Video unavailable for %s: %s", video_id, type(error).__name__)
+        raise HTTPException(
+            status_code=400,
+            detail="This video is unavailable or restricted. Try another video."
+        ) from error
+    except YouTubeTranscriptApiException as error:
+        logger.warning("Caption retrieval failed for %s: %s", video_id, type(error).__name__)
+        if has_video_fallback():
+            return build_recipe_from_video(video_id)
+        raise HTTPException(
+            status_code=502,
+            detail="Could not retrieve this video's captions. Paste its transcript below or try another video."
+        ) from error
+
+    return build_recipe(transcript_text)
+
+
+@app.post("/recipe-from-transcript/")
+def recipe_from_transcript(data: TranscriptRequest):
+    return build_recipe(data.transcript.splitlines())
+
+
+def build_recipe_from_video(video_id):
+    try:
+        notes = get_video_cooking_notes(video_id)
+    except VideoFallbackError as error:
+        logger.warning("Gemini video fallback failed for %s: %s", video_id, type(error).__name__)
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    if notes.strip().upper() == "NO_RECIPE":
+        raise HTTPException(status_code=422, detail="This video does not describe a cooking recipe.")
+    return build_recipe(notes.splitlines())
+
+
+def build_recipe(transcript_lines):
+    cleaned_text = clean_transcript(transcript_lines)
 
     if not cleaned_text:
         raise HTTPException(status_code=422, detail="No usable captions were found for this video.")

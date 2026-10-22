@@ -52,6 +52,26 @@ button {
   margin-top: 1rem;
 }
 
+.transcript-fallback {
+  margin: 20px 0;
+}
+
+.transcript-fallback summary {
+  cursor: pointer;
+}
+
+.transcript-fallback label,
+.transcript-fallback textarea {
+  display: block;
+  width: 100%;
+  margin: 10px 0;
+}
+
+.transcript-fallback textarea {
+  padding: 12px;
+  font: inherit;
+}
+
 .step-card {
   background: #eeeeee;
   padding: 25px;

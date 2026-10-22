@@ -1,9 +1,12 @@
 function LandingPage({
   url,
   setUrl,
+  manualTranscript,
+  setManualTranscript,
   transcriptMode,
   setTranscriptMode,
   generateRecipe,
+  generateFromTranscript,
   loading,
   error
 }) {
@@ -30,7 +33,7 @@ function LandingPage({
         >
 
           <option value="captions">
-            YouTube Captions
+            Automatic Recipe
           </option>
 
           <option value="whisper" disabled>
@@ -50,6 +53,22 @@ function LandingPage({
           {error}
         </div>
       )}
+
+      <details className="transcript-fallback">
+        <summary>Have a transcript? Paste it instead</summary>
+        <p>Open the video's transcript on YouTube, copy its caption text, and paste it here. This works when the server cannot fetch captions automatically.</p>
+        <label htmlFor="manual-transcript">Video transcript</label>
+        <textarea
+          id="manual-transcript"
+          rows="8"
+          value={manualTranscript}
+          onChange={(event) => setManualTranscript(event.target.value)}
+          placeholder="Paste the spoken recipe instructions here"
+        />
+        <button type="button" onClick={generateFromTranscript} disabled={loading}>
+          Generate from Transcript
+        </button>
+      </details>
 
       {loading && (
         <p>Generating recipe...</p>

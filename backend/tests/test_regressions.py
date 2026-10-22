@@ -1,4 +1,5 @@
 import json
+import io
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -6,6 +7,13 @@ from unittest.mock import patch
 import openai
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from youtube_transcript_api import (
+    NoTranscriptFound,
+    RequestBlocked,
+    TranscriptsDisabled,
+    VideoUnavailable,
+    YouTubeDataUnparsable,
+)
 
 from main import app
 from models.recipe import Recipe, SafetyAnalysis
@@ -13,6 +21,7 @@ from services.cleaner import clean_transcript
 from services.cooking_assistant import answer_cooking_question
 from services.parser_llm import NoRecipeError, RecipeParseError, parse_recipe_with_llm
 from services.safety_analyzer import SafetyParseError, analyze_recipe_safety
+from services.video_fallback import VideoFallbackError, get_video_cooking_notes
 from utils.youtube import extract_video_id
 
 
@@ -54,7 +63,7 @@ class DataValidationTests(unittest.TestCase):
 
     def test_short_spoken_captions_survive_noise_cleanup(self):
         self.assertEqual(
-            clean_transcript(["[Music]", "2 eggs", "[Applause] Add salt", "Bake 20m"]),
+            clean_transcript(["[Music]", "0:03 2 eggs", "[Applause] Add salt", "Bake 20m"]),
             ["2 eggs", "Add salt", "Bake 20m"],
         )
 
@@ -87,6 +96,23 @@ class DataValidationTests(unittest.TestCase):
         with patch("services.cooking_assistant.get_client") as get_client:
             get_client.return_value.chat.completions.create.return_value = SimpleNamespace(choices=[])
             self.assertIsNone(answer_cooking_question(RECIPE_DATA, 0, "How long?"))
+
+    def test_gemini_video_request_uses_the_public_video_id(self):
+        response = io.BytesIO(json.dumps({
+            "candidates": [{"content": {"parts": [{"text": "2 eggs\nCook in a pan."}]}}]
+        }).encode())
+        with (
+            patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}),
+            patch("services.video_fallback.urlopen", return_value=response) as open_url,
+        ):
+            notes = get_video_cooking_notes(VIDEO_ID)
+        request = open_url.call_args.args[0]
+        body = json.loads(request.data)
+        self.assertEqual(notes, "2 eggs\nCook in a pan.")
+        self.assertEqual(request.get_header("X-goog-api-key"), "test-key")
+        self.assertEqual(
+            body["contents"][0]["parts"][1]["file_data"]["file_uri"], VIDEO_URL
+        )
 
 
 class ApiTests(unittest.TestCase):
@@ -146,6 +172,63 @@ class ApiTests(unittest.TestCase):
             response = self.client.get("/transcript/", params={"url": VIDEO_URL})
         self.assertEqual(response.status_code, 422)
         safety.assert_not_called()
+
+    def test_transcript_explains_caption_fetch_failures(self):
+        cases = (
+            (RequestBlocked(VIDEO_ID), 503, "blocked"),
+            (TranscriptsDisabled(VIDEO_ID), 422, "captions"),
+            (NoTranscriptFound(VIDEO_ID, ["en"], "none"), 422, "captions"),
+            (VideoUnavailable(VIDEO_ID), 400, "unavailable"),
+            (YouTubeDataUnparsable(VIDEO_ID), 502, "retrieve"),
+        )
+        for error, status, message in cases:
+            with self.subTest(error=type(error).__name__):
+                with (
+                    patch("main.get_transcript", side_effect=error),
+                    patch("main.has_video_fallback", return_value=False),
+                ):
+                    response = self.client.get("/transcript/", params={"url": VIDEO_URL})
+                self.assertEqual(response.status_code, status)
+                self.assertIn(message, response.json()["detail"].lower())
+
+    def test_blocked_captions_fall_back_to_video_analysis(self):
+        with (
+            patch("main.get_transcript", side_effect=RequestBlocked(VIDEO_ID)),
+            patch("main.has_video_fallback", return_value=True),
+            patch("main.get_video_cooking_notes", return_value="2 eggs\nCook in a pan.") as analyze,
+            patch("main.parse_recipe_with_llm", return_value=Recipe.model_validate(RECIPE_DATA)) as parse,
+            patch("main.analyze_recipe_safety", return_value=SafetyAnalysis.model_validate(SAFETY_DATA)),
+        ):
+            response = self.client.get("/transcript/", params={"url": VIDEO_URL})
+        self.assertEqual(response.status_code, 200)
+        analyze.assert_called_once_with(VIDEO_ID)
+        self.assertEqual(parse.call_args.args[0], ["2 eggs", "Cook in a pan."])
+
+    def test_video_fallback_failure_is_reported(self):
+        with (
+            patch("main.get_transcript", side_effect=RequestBlocked(VIDEO_ID)),
+            patch("main.has_video_fallback", return_value=True),
+            patch("main.get_video_cooking_notes", side_effect=VideoFallbackError("Limit reached", 503)),
+        ):
+            response = self.client.get("/transcript/", params={"url": VIDEO_URL})
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["detail"], "Limit reached")
+
+    def test_pasted_transcript_uses_same_recipe_pipeline(self):
+        with (
+            patch("main.parse_recipe_with_llm", return_value=Recipe.model_validate(RECIPE_DATA)) as parse,
+            patch("main.analyze_recipe_safety", return_value=SafetyAnalysis.model_validate(SAFETY_DATA)),
+        ):
+            response = self.client.post(
+                "/recipe-from-transcript/",
+                json={"transcript": "0:00\n[Music] 2 eggs\n0:03 Cook the eggs."},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(parse.call_args.args[0], ["2 eggs", "Cook the eggs."])
+        self.assertEqual(response.json()["title"], "Eggs")
+
+        response = self.client.post("/recipe-from-transcript/", json={"transcript": "   "})
+        self.assertEqual(response.status_code, 422)
 
     def test_ask_validates_step_and_question(self):
         for change in ({"current_step": -1}, {"current_step": 1}, {"question": "   "}):

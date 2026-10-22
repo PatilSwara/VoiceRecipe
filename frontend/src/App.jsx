@@ -7,6 +7,7 @@ import { API_URL, readApiResponse } from "./api"
 function App() {
 
   const [url, setUrl] = useState("")
+  const [manualTranscript, setManualTranscript] = useState("")
   const [recipe, setRecipe] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
@@ -20,14 +21,29 @@ function App() {
       return
     }
 
+    await requestRecipe(() => fetch(
+        `${API_URL}/transcript/?url=${encodeURIComponent(url.trim())}&mode=${transcriptMode}`
+      ))
+  }
+
+  async function generateFromTranscript() {
+    if (!manualTranscript.trim()) {
+      setError("Paste the video's transcript first.")
+      return
+    }
+    await requestRecipe(() => fetch(`${API_URL}/recipe-from-transcript/`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transcript: manualTranscript }),
+    }))
+  }
+
+  async function requestRecipe(request) {
     setLoading(true)
     setError("")
 
     try {
-
-      const response = await fetch(
-        `${API_URL}/transcript/?url=${encodeURIComponent(url.trim())}&mode=${transcriptMode}`
-      )
+      const response = await request()
       const data = await readApiResponse(response, "Could not generate a recipe. Please try again.")
       if (
         typeof data.title !== "string" ||
@@ -76,9 +92,12 @@ function App() {
       <LandingPage
         url={url}
         setUrl={setUrl}
+        manualTranscript={manualTranscript}
+        setManualTranscript={setManualTranscript}
         transcriptMode={transcriptMode}
         setTranscriptMode={setTranscriptMode}
         generateRecipe={generateRecipe}
+        generateFromTranscript={generateFromTranscript}
         loading={loading}
         error={error}
       />
