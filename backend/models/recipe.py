@@ -1,34 +1,38 @@
-from pydantic import BaseModel
-from typing import List
+from typing import Annotated, List
+
+from pydantic import BaseModel, Field, StringConstraints
+
+
+NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class Ingredient(BaseModel):
-    name: str
-    quantity: str
+    name: NonEmptyText
+    quantity: NonEmptyText
 
 
 class Step(BaseModel):
     step_number: int
-    instruction: str
+    instruction: NonEmptyText
 
 
 class Recipe(BaseModel):
-    title: str
-    estimated_time: str
-    difficulty: str
+    title: NonEmptyText
+    estimated_time: NonEmptyText
+    difficulty: NonEmptyText
     equipment: List[str]
-    ingredients: List[Ingredient]
-    steps: List[Step]
+    ingredients: List[Ingredient] = Field(min_length=1)
+    steps: List[Step] = Field(min_length=1)
 
 
 class SafetyWarning(BaseModel):
-    type: str
-    warning: str
+    type: NonEmptyText
+    warning: NonEmptyText
 
 
 class FirstAid(BaseModel):
-    situation: str
-    response: str
+    situation: NonEmptyText
+    response: NonEmptyText
 
 
 class SafetyAnalysis(BaseModel):

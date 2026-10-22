@@ -1,22 +1,16 @@
 import json
-import os
-from pathlib import Path
-from models.recipe import Recipe
-from dotenv import load_dotenv
-from openai import OpenAI
 from pydantic import ValidationError
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+from models.recipe import Recipe
+from services.groq_client import GROQ_MODEL, get_client
 
-ENV_PATH = BASE_DIR / ".env"
 
-load_dotenv(dotenv_path=ENV_PATH)
+class RecipeParseError(ValueError):
+    pass
 
-def get_client():
-    return OpenAI(
-        api_key=os.getenv("GROQ_API_KEY"),
-        base_url="https://api.groq.com/openai/v1"
-    )
+
+class NoRecipeError(RecipeParseError):
+    pass
 
 
 def parse_recipe_with_llm(transcript_lines):
@@ -40,6 +34,10 @@ You should:
 - normalize ingredient and cooking terminology
 - infer likely ingredient names from context
 - use standard culinary terminology whenever possible
+- do not invent a recipe when the transcript has no cooking instructions
+
+If the transcript does not describe preparing food or drink, return ONLY
+{{"error": "not_a_recipe"}}. Do not guess ingredients or steps.
 
 Difficulty should be determined realistically based on:
 - cooking techniques required
@@ -97,7 +95,7 @@ Transcript:
 """
 
     response = get_client().chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model=GROQ_MODEL,
         messages=[
             {
                 "role": "user",
@@ -108,23 +106,15 @@ Transcript:
         response_format={"type": "json_object"}
     )
 
-    text_response = response.choices[0].message.content.strip()
-
     try:
+        text_response = response.choices[0].message.content
+        recipe_data = json.loads(text_response or "")
+        if isinstance(recipe_data, dict) and recipe_data.get("error") == "not_a_recipe":
+            raise NoRecipeError("The captions do not describe a recipe.")
+        recipe = Recipe.model_validate(recipe_data)
+    except (IndexError, AttributeError, TypeError, json.JSONDecodeError, ValidationError) as error:
+        raise RecipeParseError("The AI returned an unusable recipe.") from error
 
-        recipe_data = json.loads(text_response)
-
-        recipe = Recipe(**recipe_data)
-
-        return recipe
-
-    except (json.JSONDecodeError, ValidationError):
-
-        return Recipe(
-            title="Parsing Failed",
-            estimated_time="Unknown",
-            difficulty="Unknown",
-            equipment=[],
-            ingredients=[],
-            steps=[]
-        )
+    for number, step in enumerate(recipe.steps, start=1):
+        step.step_number = number
+    return recipe

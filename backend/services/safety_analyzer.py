@@ -1,15 +1,12 @@
 import json
-import os
 
-from openai import OpenAI
 from pydantic import ValidationError
 from models.recipe import SafetyAnalysis
+from services.groq_client import GROQ_MODEL, get_client
 
-def get_client():
-    return OpenAI(
-        api_key=os.getenv("GROQ_API_KEY"),
-        base_url="https://api.groq.com/openai/v1"
-    )
+
+class SafetyParseError(ValueError):
+    pass
 
 
 def analyze_recipe_safety(recipe):
@@ -69,7 +66,7 @@ Recipe:
 """
 
     response = get_client().chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model=GROQ_MODEL,
         messages=[
             {
                 "role": "user",
@@ -80,17 +77,8 @@ Recipe:
         response_format={"type": "json_object"}
     )
 
-    text_response = response.choices[0].message.content.strip()
-
     try:
-        safety_data = json.loads(text_response)
-
-        validated_safety = SafetyAnalysis(**safety_data)
-
-        return validated_safety
-
-    except (json.JSONDecodeError, ValidationError):
-        return SafetyAnalysis(
-        safety_warnings=[],
-        first_aid=[]
-)
+        text_response = response.choices[0].message.content
+        return SafetyAnalysis.model_validate(json.loads(text_response or ""))
+    except (IndexError, AttributeError, TypeError, json.JSONDecodeError, ValidationError) as error:
+        raise SafetyParseError("The AI returned an unusable safety analysis.") from error

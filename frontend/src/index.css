@@ -1,3 +1,7 @@
+* {
+  box-sizing: border-box;
+}
+
 body {
   margin: 0;
   font-family: Arial, sans-serif;
@@ -7,7 +11,7 @@ body {
 .app {
   max-width: 900px;
   margin: auto;
-  padding: 40px;
+  padding: 32px 20px;
 }
 
 h1 {
@@ -16,12 +20,14 @@ h1 {
 
 .input-section {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   margin-bottom: 30px;
 }
 
-input {
+input, select {
   flex: 1;
+  min-width: 180px;
   padding: 12px;
   font-size: 16px;
 }
@@ -35,8 +41,15 @@ button {
 .recipe-container,
 .cooking-mode {
   background: white;
+  max-width: 900px;
+  margin: 24px auto;
   padding: 30px;
   border-radius: 12px;
+}
+
+.error-message {
+  color: #a00000;
+  margin-top: 1rem;
 }
 
 .step-card {
@@ -48,6 +61,7 @@ button {
 
 .controls {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   margin-bottom: 20px;
 }
@@ -55,4 +69,19 @@ button {
 .start-button,
 .exit-button {
   margin-top: 20px;
+}
+
+.start-button {
+  margin-right: 10px;
+}
+
+@media (max-width: 600px) {
+  .recipe-container, .cooking-mode {
+    margin: 12px;
+    padding: 20px;
+  }
+
+  .input-section > * {
+    flex: 0 0 100%;
+  }
 }

@@ -12,10 +12,11 @@ function LandingPage({
 
       <h1>VoiceRecipe</h1>
 
-      <div className="input-section">
+      <form className="input-section" onSubmit={(event) => { event.preventDefault(); generateRecipe(); }}>
 
         <input
-          type="text"
+          type="url"
+          aria-label="YouTube video URL"
           placeholder="Paste YouTube recipe URL"
           value={url}
           onChange={(event) => setUrl(event.target.value)}
@@ -38,14 +39,14 @@ function LandingPage({
 
         </select>
 
-        <button onClick={generateRecipe} disabled={loading}>
+        <button type="submit" disabled={loading}>
           Generate Recipe
         </button>
 
-      </div>
+      </form>
 
       {error && (
-        <div className="error-message" style={{color: 'red', marginTop: '1rem'}}>
+        <div className="error-message" role="alert">
           {error}
         </div>
       )}

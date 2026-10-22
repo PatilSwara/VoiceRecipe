@@ -1,12 +1,14 @@
 function RecipePage({
   recipe,
-  startCooking
+  startCooking,
+  tryAnotherVideo
 }) {
 
   return (
         <div className="recipe-container">
 
           <h2>{recipe.title}</h2>
+          <p>AI-generated recipe and safety guidance. Check the original video before cooking.</p>
 
           <p>
             <strong>Estimated Time:</strong>
@@ -21,12 +23,13 @@ function RecipePage({
           </p>
 
           <h3>Equipment</h3>
-
-          <ul>
-            {recipe.equipment.map((item, index) => (
-              <li key={index}>{item}</li>
-            ))}
-          </ul>
+          {recipe.equipment.length === 0 ? <p>None listed.</p> : (
+            <ul>
+              {recipe.equipment.map((item, index) => (
+                <li key={index}>{item}</li>
+              ))}
+            </ul>
+          )}
 
           <h3>Ingredients</h3>
 
@@ -49,32 +52,37 @@ function RecipePage({
           </ol>
 
           <h3>Safety Warnings</h3>
-          <ul>
-            {recipe.safety_warnings.map((warning, index) => (
-              <li key={index}>
-                <strong>{warning.type}:</strong>
-                {" "}
-                {warning.warning}
-              </li>
-            ))}
-          </ul>
+          {recipe.safety_warnings.length === 0 ? <p>None identified for this recipe.</p> : (
+            <ul>
+              {recipe.safety_warnings.map((warning, index) => (
+                <li key={index}>
+                  <strong>{warning.type}:</strong>
+                  {" "}
+                  {warning.warning}
+                </li>
+              ))}
+            </ul>
+          )}
           
           <h3>First Aid</h3>
-          <ul>
-            {recipe.first_aid.map((aid, index) => (
-              <li key={index}>
-                <strong>{aid.situation}:</strong>
-                {" "}
-                {aid.response}
-              </li>
-            ))}
-          </ul>
+          {recipe.first_aid.length === 0 ? <p>None identified for this recipe.</p> : (
+            <ul>
+              {recipe.first_aid.map((aid, index) => (
+                <li key={index}>
+                  <strong>{aid.situation}:</strong>
+                  {" "}
+                  {aid.response}
+                </li>
+              ))}
+            </ul>
+          )}
           <button
             className="start-button"
             onClick={startCooking}
           >
             Start Cooking
           </button>
+          <button onClick={tryAnotherVideo}>Try Another Video</button>
 
         </div>
   )

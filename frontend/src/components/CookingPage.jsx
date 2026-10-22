@@ -1,224 +1,312 @@
-import { useState, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { API_URL, readApiResponse } from "../api";
 
 function CookingPage({ recipe, exitCookingMode }) {
   const [currentStep, setCurrentStep] = useState(0);
   const [lastHeard, setLastHeard] = useState("");
   const [assistantReply, setAssistantReply] = useState("");
   const [voiceEnabled, setVoiceEnabled] = useState(false);
-  
+  const [voiceError, setVoiceError] = useState("");
+
   const currentStepRef = useRef(0);
   const recognitionRef = useRef(null);
+  const recognitionStateRef = useRef("idle");
+  const voiceEnabledRef = useRef(false);
+  const speakingRef = useRef(false);
+  const activeRef = useRef(false);
+  const speechIdRef = useRef(0);
+  const requestIdRef = useRef(0);
+  const requestControllerRef = useRef(null);
 
-  const voiceEnabledRef = useRef(voiceEnabled);
-  useEffect(() => {
-    voiceEnabledRef.current = voiceEnabled;
-  }, [voiceEnabled]);
-
-  // Initialize speech synthesis and read first step on mount
-  useEffect(() => {
-    if (window.speechSynthesis.getVoices().length === 0) {
-      window.speechSynthesis.onvoiceschanged = () => {
-        speakStep(recipe.steps[0].instruction);
-        window.speechSynthesis.onvoiceschanged = null;
-      };
-    } else {
-      speakStep(recipe.steps[0].instruction);
+  const startListening = useCallback(() => {
+    const recognition = recognitionRef.current;
+    if (
+      !recognition ||
+      !activeRef.current ||
+      !voiceEnabledRef.current ||
+      speakingRef.current ||
+      recognitionStateRef.current !== "idle"
+    ) {
+      return;
     }
 
-    return () => {
-      window.speechSynthesis.cancel();
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
-      }
-    };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  function speakStep(text) {
-    window.speechSynthesis.cancel();
-    
-    // Pause recognition while speaking to prevent feedback loop
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-    }
-    
-    setTimeout(() => {
-      const speech = new SpeechSynthesisUtterance(text);
-      const voices = window.speechSynthesis.getVoices();
-      const selectedVoice = voices.find((voice) => voice.lang === "en-US");
-      if (selectedVoice) speech.voice = selectedVoice;
-      speech.lang = "en-US";
-      speech.rate = 0.9;
-      
-      speech.onend = () => {
-        // Restart recognition if it was enabled
-        if (voiceEnabledRef.current && recognitionRef.current) {
-          try {
-            recognitionRef.current.start();
-          } catch (e) {
-            console.error("Failed to restart recognition after speaking", e);
-          }
-        }
-      };
-
-      window.speechSynthesis.speak(speech);
-    }, 50);
-  }
-
-  function nextStep() {
-    const current = currentStepRef.current;
-    if (current < recipe.steps.length - 1) {
-      const next = current + 1;
-      currentStepRef.current = next;
-      setCurrentStep(next);
-      speakStep(recipe.steps[next].instruction);
-    }
-  }
-
-  function previousStep() {
-    const current = currentStepRef.current;
-    if (current > 0) {
-      const previous = current - 1;
-      currentStepRef.current = previous;
-      setCurrentStep(previous);
-      speakStep(recipe.steps[previous].instruction);
-    }
-  }
-
-  async function askCookingQuestion(question) {
+    recognitionStateRef.current = "starting";
     try {
-      const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
-      const response = await fetch(`${API_URL}/ask/`, {
+      recognition.start();
+    } catch (error) {
+      recognitionStateRef.current = "idle";
+      if (error.name !== "InvalidStateError") {
+        voiceEnabledRef.current = false;
+        setVoiceEnabled(false);
+        setVoiceError("Could not start voice commands. Check microphone access.");
+      }
+    }
+  }, []);
+
+  const pauseListening = useCallback(() => {
+    const recognition = recognitionRef.current;
+    if (
+      !recognition ||
+      recognitionStateRef.current === "idle" ||
+      recognitionStateRef.current === "stopping"
+    ) {
+      return;
+    }
+    recognitionStateRef.current = "stopping";
+    try {
+      recognition.abort();
+    } catch {
+      recognitionStateRef.current = "idle";
+    }
+  }, []);
+
+  const speakStep = useCallback((text) => {
+    if (!activeRef.current || !text) return;
+    if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) {
+      setVoiceError("Speech playback is unavailable in this browser.");
+      return;
+    }
+
+    const speechId = ++speechIdRef.current;
+    speakingRef.current = true;
+    pauseListening();
+    window.speechSynthesis.cancel();
+
+    const speech = new window.SpeechSynthesisUtterance(text);
+    const selectedVoice = window.speechSynthesis
+      .getVoices()
+      .find((voice) => voice.lang === "en-US");
+    if (selectedVoice) speech.voice = selectedVoice;
+    speech.lang = "en-US";
+    speech.rate = 0.9;
+
+    const finishSpeech = () => {
+      if (!activeRef.current || speechIdRef.current !== speechId) return;
+      speakingRef.current = false;
+      startListening();
+    };
+    speech.onend = finishSpeech;
+    speech.onerror = finishSpeech;
+
+    try {
+      window.speechSynthesis.speak(speech);
+    } catch {
+      finishSpeech();
+      setVoiceError("Speech playback failed. You can still use the step buttons.");
+    }
+  }, [pauseListening, startListening]);
+
+  const nextStep = useCallback(() => {
+    const next = currentStepRef.current + 1;
+    if (next >= recipe.steps.length) return;
+    currentStepRef.current = next;
+    setCurrentStep(next);
+    setAssistantReply("");
+    requestIdRef.current += 1;
+    requestControllerRef.current?.abort();
+    speakStep(recipe.steps[next].instruction);
+  }, [recipe.steps, speakStep]);
+
+  const previousStep = useCallback(() => {
+    const previous = currentStepRef.current - 1;
+    if (previous < 0) return;
+    currentStepRef.current = previous;
+    setCurrentStep(previous);
+    setAssistantReply("");
+    requestIdRef.current += 1;
+    requestControllerRef.current?.abort();
+    speakStep(recipe.steps[previous].instruction);
+  }, [recipe.steps, speakStep]);
+
+  const askCookingQuestion = useCallback(async (question) => {
+    requestControllerRef.current?.abort();
+    const requestId = ++requestIdRef.current;
+    const questionStep = currentStepRef.current;
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
+
+    try {
+      const response = await fetch(API_URL + "/ask/", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          recipe: recipe,
-          current_step: currentStepRef.current,
-          question: question,
+          recipe,
+          current_step: questionStep,
+          question,
         }),
+        signal: controller.signal,
       });
-      const data = await response.json();
+      const data = await readApiResponse(response, "The cooking assistant is unavailable. Please try again.");
+      if (typeof data.answer !== "string" || !data.answer.trim()) {
+        throw new Error("The cooking assistant returned an empty answer. Please try again.");
+      }
+      if (
+        !activeRef.current ||
+        requestIdRef.current !== requestId ||
+        currentStepRef.current !== questionStep
+      ) {
+        return;
+      }
       setAssistantReply(data.answer);
       speakStep(data.answer);
     } catch (error) {
-      console.error(error);
-      setAssistantReply("Sorry, I could not reach the server.");
-      speakStep("Sorry, I could not reach the server.");
+      if (controller.signal.aborted || !activeRef.current || requestIdRef.current !== requestId) {
+        return;
+      }
+      const message = error instanceof TypeError
+        ? "Could not reach the backend. Check the API server and try again."
+        : error.message || "Could not reach the cooking assistant.";
+      setAssistantReply(message);
+      speakStep(message);
+    } finally {
+      if (requestControllerRef.current === controller) {
+        requestControllerRef.current = null;
+      }
     }
-  }
+  }, [recipe, speakStep]);
+
+  const handleTranscript = useCallback((transcript) => {
+    const command = transcript
+      .toLowerCase()
+      .trim()
+      .replace(/[.,!?]+$/g, "")
+      .replace(/\s+/g, " ");
+
+    if (["next", "next step", "go to next step"].includes(command)) {
+      nextStep();
+    } else if (["previous", "previous step", "go back", "back"].includes(command)) {
+      previousStep();
+    } else if (["repeat", "repeat step", "repeat that"].includes(command)) {
+      speakStep(recipe.steps[currentStepRef.current].instruction);
+    } else if (["exit", "exit cooking mode", "stop cooking"].includes(command)) {
+      exitCookingMode();
+    } else {
+      askCookingQuestion(transcript);
+    }
+  }, [askCookingQuestion, exitCookingMode, nextStep, previousStep, recipe.steps, speakStep]);
 
   function toggleVoiceCommands() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      alert("Speech recognition not supported in this browser.");
+      setVoiceError("Speech recognition is unavailable in this browser. Use the step buttons.");
       return;
     }
-    setVoiceEnabled(!voiceEnabled);
+    const enabled = !voiceEnabled;
+    voiceEnabledRef.current = enabled;
+    setVoiceEnabled(enabled);
+    setVoiceError("");
   }
 
   useEffect(() => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-
-    if (!SpeechRecognition) return;
-
-    if (voiceEnabled) {
-      const recognition = new SpeechRecognition();
-      recognitionRef.current = recognition;
-      recognition.continuous = true;
-
-      recognition.onresult = (event) => {
-        const transcript = event.results[event.results.length - 1][0].transcript.toLowerCase();
-        setLastHeard(transcript);
-
-        if (transcript.includes("next")) {
-          nextStep();
-          setAssistantReply("");
-        } else if (transcript.includes("previous")) {
-          previousStep();
-          setAssistantReply("");
-        } else if (transcript.includes("repeat")) {
-          speakStep(recipe.steps[currentStepRef.current].instruction);
-          setAssistantReply("");
-        } else if (transcript.includes("exit")) {
-          exitCookingMode();
-        } else {
-          askCookingQuestion(transcript);
-        }
-      };
-
-      recognition.onend = () => {
-        // Restart only if we still want voice enabled
-        if (voiceEnabled) {
-          try {
-            recognition.start();
-          } catch (e) {
-            console.error("Failed to restart recognition", e);
-          }
-        }
-      };
-
-      try {
-        recognition.start();
-      } catch (e) {
-        console.error(e);
-      }
-    } else {
-      if (recognitionRef.current) {
-        recognitionRef.current.onend = null; // Prevent restart
-        recognitionRef.current.stop();
-      }
-    }
+    activeRef.current = true;
+    let effectActive = true;
+    queueMicrotask(() => {
+      if (effectActive) speakStep(recipe.steps[0].instruction);
+    });
 
     return () => {
-      if (recognitionRef.current) {
-        recognitionRef.current.onend = null;
-        recognitionRef.current.stop();
+      effectActive = false;
+      activeRef.current = false;
+      voiceEnabledRef.current = false;
+      speakingRef.current = false;
+      speechIdRef.current += 1;
+      requestIdRef.current += 1;
+      requestControllerRef.current?.abort();
+      window.speechSynthesis?.cancel();
+    };
+  }, [recipe.steps, speakStep]);
+
+  useEffect(() => {
+    if (!voiceEnabled) return undefined;
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return undefined;
+
+    const recognition = new SpeechRecognition();
+    recognitionRef.current = recognition;
+    recognitionStateRef.current = "idle";
+    recognition.continuous = true;
+    recognition.interimResults = false;
+    recognition.lang = "en-US";
+
+    recognition.onstart = () => {
+      recognitionStateRef.current = "listening";
+    };
+    recognition.onend = () => {
+      recognitionStateRef.current = "idle";
+      startListening();
+    };
+    recognition.onerror = (event) => {
+      if (["not-allowed", "service-not-allowed", "audio-capture", "network"].includes(event.error)) {
+        voiceEnabledRef.current = false;
+        setVoiceEnabled(false);
+        setVoiceError("Voice commands stopped. Check microphone permission and connection.");
       }
     };
-  }, [voiceEnabled]); 
+    recognition.onresult = (event) => {
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const result = event.results[index];
+        if (!result.isFinal) continue;
+        const transcript = result[0]?.transcript?.trim();
+        if (transcript) {
+          setLastHeard(transcript);
+          handleTranscript(transcript);
+        }
+      }
+    };
+
+    let effectActive = true;
+    queueMicrotask(() => {
+      if (effectActive) startListening();
+    });
+    return () => {
+      effectActive = false;
+      if (recognitionRef.current === recognition) {
+        recognitionRef.current = null;
+      }
+      recognition.onstart = null;
+      recognition.onend = null;
+      recognition.onerror = null;
+      recognition.onresult = null;
+      recognitionStateRef.current = "idle";
+      try {
+        recognition.abort();
+      } catch {
+        // The recognition session may already be closed.
+      }
+    };
+  }, [handleTranscript, startListening, voiceEnabled]);
 
   return (
     <div className="cooking-mode">
       <h2>Cooking Mode</h2>
-      <p>
-        Step {currentStep + 1} of {recipe.steps.length}
-      </p>
-
+      <p>Step {currentStep + 1} of {recipe.steps.length}</p>
       <div className="step-card">
         <h3>Step {recipe.steps[currentStep].step_number}</h3>
         <p>{recipe.steps[currentStep].instruction}</p>
       </div>
 
-      <button onClick={toggleVoiceCommands} style={{backgroundColor: voiceEnabled ? '#d32f2f' : ''}}>
+      <button
+        onClick={toggleVoiceCommands}
+        aria-pressed={voiceEnabled}
+        style={{ backgroundColor: voiceEnabled ? "#d32f2f" : "" }}
+      >
         {voiceEnabled ? "Disable Voice Commands" : "Enable Voice Commands"}
       </button>
+      {voiceError && <p role="alert">{voiceError}</p>}
 
       <div className="controls">
-        <button onClick={previousStep}>Previous</button>
-        <button onClick={() => speakStep(recipe.steps[currentStep].instruction)}>
-          Repeat
-        </button>
-        <button onClick={nextStep}>Next</button>
+        <button onClick={previousStep} disabled={currentStep === 0}>Previous</button>
+        <button onClick={() => speakStep(recipe.steps[currentStep].instruction)}>Repeat</button>
+        <button onClick={nextStep} disabled={currentStep === recipe.steps.length - 1}>Next</button>
       </div>
-      
+
       <div className="conversation-box">
         <h3>Voice Assistant</h3>
-        {lastHeard && (
-          <p>
-            <strong>You said:</strong> {lastHeard}
-          </p>
-        )}
-        {assistantReply && (
-          <p>
-            <strong>Assistant:</strong> {assistantReply}
-          </p>
-        )}
+        {lastHeard && <p><strong>You said:</strong> {lastHeard}</p>}
+        {assistantReply && <p><strong>Assistant:</strong> {assistantReply}</p>}
       </div>
-      
-      <button className="exit-button" onClick={exitCookingMode}>
-        Exit Cooking Mode
-      </button>
+
+      <button className="exit-button" onClick={exitCookingMode}>Exit Cooking Mode</button>
     </div>
   );
 }
